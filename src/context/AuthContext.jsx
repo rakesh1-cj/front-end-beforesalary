@@ -1,0 +1,262 @@
+import { createContext, useContext, useState, useEffect } from 'react';
+import api from '../utils/api';
+import toast from 'react-hot-toast';
+
+const AuthContext = createContext();
+
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const userData = localStorage.getItem('user');
+    
+    if (token && userData) {
+      try {
+        setUser(JSON.parse(userData));
+        setIsAuthenticated(true);
+      } catch (error) {
+        console.error('Error parsing user data:', error);
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+      }
+    }
+    setLoading(false);
+  }, []);
+
+  const login = async (email, password) => {
+    try {
+      const response = await api.post('/auth/login', { email, password });
+      
+      // Check if response has success field or if it's a direct success response
+      if (response.data.success === false) {
+        toast.error(response.data.message || 'Login failed');
+        return { success: false, message: response.data.message };
+      }
+      
+      // Extract token and user data
+      const { token, user: userData } = response.data;
+      
+      if (!token || !userData) {
+        toast.error('Invalid response from server');
+        return { success: false, message: 'Invalid response from server' };
+      }
+      
+      // Store authentication data
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify(userData));
+      setUser(userData);
+      setIsAuthenticated(true);
+      toast.success('Login successful!');
+      
+      console.log('Login successful, user role:', userData.role);
+      // Change route to dashboard instead of login page
+      window.location.href = '/dashboard';
+      return { success: true, user: userData };
+    } catch (error) {
+      console.error('Login error:', error);
+      const message = error.response?.data?.message || 'Login failed';
+      toast.error(message);
+      return { success: false, message };
+    }
+  };
+
+  const register = async (name, email, phone, password) => {
+    try {
+      const response = await api.post('/auth/register', {
+        name,
+        email,
+        phone,
+        password,
+      });
+
+      if (response.data.success === false) {
+        const message = response.data.message || 'Registration failed';
+        toast.error(message);
+        return { success: false, message };
+      }
+
+      const { token, user: userData } = response.data;
+
+      if (!token || !userData) {
+        const message = 'Invalid response from server';
+        toast.error(message);
+        return { success: false, message };
+      }
+
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify(userData));
+      setUser(userData);
+      setIsAuthenticated(true);
+      toast.success('Registration successful!');
+      return { success: true, user: userData };
+    } catch (error) {
+      const message = error.response?.data?.message || 'Registration failed';
+      toast.error(message);
+      return { success: false, message };
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setUser(null);
+    setIsAuthenticated(false);
+    toast.success('Logged out successfully');
+  };
+
+  const sendOTP = async (email, phone, purpose = 'verification') => {
+    try {
+      const response = await api.post('/auth/send-otp', { email, phone, purpose });
+      if (response.data.success) {
+        toast.success('OTP sent successfully!');
+        return { success: true, data: response.data };
+      } else {
+        toast.error(response.data.message || 'Failed to send OTP');
+        return { success: false, message: response.data.message };
+      }
+    } catch (error) {
+      const message = error.response?.data?.message || 'Failed to send OTP';
+      toast.error(message);
+      return { success: false, message };
+    }
+  };
+
+  // Store verified client emails in localStorage
+  const addVerifiedClient = (email) => {
+    if (!email) return;
+    let verifiedClients = [];
+    try {
+      verifiedClients = JSON.parse(localStorage.getItem('verifiedClients') || '[]');
+    } catch {
+      verifiedClients = [];
+    }
+    if (!verifiedClients.includes(email)) {
+      verifiedClients.push(email);
+      localStorage.setItem('verifiedClients', JSON.stringify(verifiedClients));
+    }
+  };
+
+  // Check if a client is already verified
+  const isClientVerified = (email) => {
+    if (!email) return false;
+    try {
+      const verifiedClients = JSON.parse(localStorage.getItem('verifiedClients') || '[]');
+      return verifiedClients.includes(email);
+    } catch {
+      return false;
+    }
+  };
+
+  const verifyOTP = async (email, phone, otp, purpose = 'verification') => {
+    // If already verified, skip verification and return success
+    if (purpose === 'application' && isClientVerified(email)) {
+      toast.success('Email already verified!');
+      return { success: true, alreadyVerified: true };
+    }
+    try {
+      const response = await api.post('/auth/verify-otp', { email, phone, otp, purpose });
+      if (purpose === 'application') {
+        toast.success('OTP verified successfully!');
+        addVerifiedClient(email);
+        return { success: true, data: response.data };
+      }
+      // For other purposes, set auth state
+      const { token, user: userData } = response.data;
+      if (token && userData) {
+        localStorage.setItem('token', token);
+        localStorage.setItem('user', JSON.stringify(userData));
+        setUser(userData);
+        setIsAuthenticated(true);
+      }
+      toast.success('OTP verified successfully!');
+      addVerifiedClient(email);
+      return { success: true, data: response.data };
+    } catch (error) {
+      const message = error.response?.data?.message || 'Invalid OTP';
+      toast.error(message);
+      return { success: false, message };
+    }
+  };
+
+  const loginWithFirebase = async (idToken, email, name) => {
+    try {
+      const response = await api.post('/auth/firebase-login', { idToken, email, name });
+      
+      if (response.data.success === false) {
+        toast.error(response.data.message || 'Firebase login failed');
+        return { success: false, message: response.data.message };
+      }
+      
+      const { token, user: userData } = response.data;
+      
+      if (!token || !userData) {
+        toast.error('Invalid response from server');
+        return { success: false, message: 'Invalid response from server' };
+      }
+      
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify(userData));
+      setUser(userData);
+      setIsAuthenticated(true);
+      toast.success('Login successful!');
+      
+      return { success: true, user: userData };
+    } catch (error) {
+      console.error('Firebase login error:', error);
+      const message = error.response?.data?.message || 'Firebase login failed';
+      toast.error(message);
+      return { success: false, message };
+    }
+  };
+
+  const resetPassword = async (email, otp, newPassword) => {
+    try {
+      const response = await api.post('/auth/reset-password', {
+        email,
+        otp,
+        newPassword,
+      });
+
+      if (response.data.success) {
+        toast.success(response.data.message || 'Password reset successful');
+        return { success: true };
+      }
+
+      toast.error(response.data.message || 'Password reset failed');
+      return { success: false, message: response.data.message };
+    } catch (error) {
+      const message =
+        error.response?.data?.message || 'Password reset failed';
+      toast.error(message);
+      return { success: false, message };
+    }
+  };
+
+  const value = {
+    user,
+    loading,
+    isAuthenticated,
+    login,
+    register,
+    logout,
+    sendOTP,
+    verifyOTP,
+    loginWithFirebase,
+    isClientVerified, // export this for use in components if needed
+    resetPassword,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};
+
